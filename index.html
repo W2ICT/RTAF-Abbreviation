@@ -121,6 +121,88 @@
   }
   .clear-btn:hover { background: var(--text3); }
   .clear-btn.show { display: flex; }
+
+  /* Category filter */
+  .cat-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .cat-toggle-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+    font-family: inherit;
+  }
+  .cat-toggle-btn:hover { border-color: var(--accent); color: var(--accent2); }
+  .cat-toggle-btn.active { border-color: var(--accent); color: var(--accent2); background: rgba(124,106,247,0.12); }
+  .cat-toggle-btn .cat-arrow { transition: transform 0.2s; font-size: 10px; }
+  .cat-toggle-btn.active .cat-arrow { transform: rotate(180deg); }
+  .active-cat-chip {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px 5px 12px;
+    background: rgba(124,106,247,0.18);
+    border: 1px solid var(--accent);
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent2);
+  }
+  .active-cat-chip.show { display: flex; }
+  .active-cat-chip button {
+    background: none; border: none; color: var(--accent2);
+    cursor: pointer; font-size: 13px; padding: 0; line-height: 1;
+  }
+  .cat-panel {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+    margin-top: 10px;
+  }
+  .cat-panel.open { max-height: 300px; }
+  .cat-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    padding-bottom: 4px;
+  }
+  .cat-chip {
+    padding: 6px 14px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    font-size: 12px;
+    color: var(--text2);
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .cat-chip:hover { border-color: var(--accent); color: var(--accent2); }
+  .cat-chip.selected { background: rgba(124,106,247,0.18); border-color: var(--accent); color: var(--accent2); }
+  .cat-chip .cat-count {
+    font-size: 10px;
+    background: var(--border);
+    border-radius: 8px;
+    padding: 1px 6px;
+    color: var(--text3);
+  }
+  .cat-chip.selected .cat-count { background: rgba(124,106,247,0.3); color: var(--accent2); }
+
   .main { max-width: 800px; margin: 0 auto; padding: 20px 16px 40px; }
   .result-box {
     background: linear-gradient(135deg, var(--surface) 0%, #1c1c28 100%);
@@ -279,6 +361,18 @@
         autocomplete="off" autocorrect="off" spellcheck="false"
         oninput="onInput()" onkeydown="onKeyDown(event)">
       <button class="clear-btn" id="clearBtn" onclick="clearSearch()">✕</button>
+    </div>
+    <div class="cat-bar">
+      <button class="cat-toggle-btn" id="catToggleBtn" onclick="toggleCatPanel()">
+        ☰ หมวดหมู่ <span class="cat-arrow">▼</span>
+      </button>
+      <div class="active-cat-chip" id="activeCatChip">
+        <span id="activeCatLabel"></span>
+        <button onclick="clearCat()">✕</button>
+      </div>
+    </div>
+    <div class="cat-panel" id="catPanel">
+      <div class="cat-chips" id="catChips"></div>
     </div>
   </div>
 </div>
@@ -642,14 +736,15 @@ function selectSuggestion(idx) {
 
 function showAllResults(q) {
   var ql = q.toLowerCase();
+  var pool = selectedCat ? fullIndex.filter(function(d) { return d.cat === selectedCat; }) : fullIndex;
   var results;
   if (mode === 'abbr') {
-    var startM = fullIndex.filter(function(d) { return d.abbr.toLowerCase().indexOf(ql) === 0; });
-    var containM = fullIndex.filter(function(d) { return d.abbr.toLowerCase().indexOf(ql) !== 0 && d.abbr.toLowerCase().indexOf(ql) !== -1; });
+    var startM = pool.filter(function(d) { return d.abbr.toLowerCase().indexOf(ql) === 0; });
+    var containM = pool.filter(function(d) { return d.abbr.toLowerCase().indexOf(ql) !== 0 && d.abbr.toLowerCase().indexOf(ql) !== -1; });
     results = startM.concat(containM);
   } else {
-    var startM2 = fullIndex.filter(function(d) { return d.full.toLowerCase().indexOf(ql) === 0; });
-    var containM2 = fullIndex.filter(function(d) { return d.full.toLowerCase().indexOf(ql) !== 0 && d.full.toLowerCase().indexOf(ql) !== -1; });
+    var startM2 = pool.filter(function(d) { return d.full.toLowerCase().indexOf(ql) === 0; });
+    var containM2 = pool.filter(function(d) { return d.full.toLowerCase().indexOf(ql) !== 0 && d.full.toLowerCase().indexOf(ql) !== -1; });
     results = startM2.concat(containM2);
   }
   var section = document.getElementById('resultsSection');
@@ -740,6 +835,86 @@ examples.forEach(function(ex) {
   };
   chips.appendChild(c);
 });
+
+// --- Category filter ---
+var selectedCat = null;
+var catPanelOpen = false;
+
+// Build category list with counts
+var catCounts = {};
+fullIndex.forEach(function(d) { catCounts[d.cat] = (catCounts[d.cat] || 0) + 1; });
+var catOrder = ['ทั่วไป','ยศทหารอากาศ','เหล่าและจำพวกทหารอากาศ','ตำแหน่ง','นขต.ทอ.','สำนัก','ศูนย์','สถานศึกษา','สถาบัน','กอง','ฝ่าย','แผนก','หมวดและหมู่'];
+var catChipsEl = document.getElementById('catChips');
+catOrder.forEach(function(cat) {
+  if (!catCounts[cat]) return;
+  var c = document.createElement('div');
+  c.className = 'cat-chip';
+  c.dataset.cat = cat;
+  c.innerHTML = escHtml(cat) + '<span class="cat-count">' + catCounts[cat] + '</span>';
+  c.onclick = function() { selectCat(cat); };
+  catChipsEl.appendChild(c);
+});
+
+function toggleCatPanel() {
+  catPanelOpen = !catPanelOpen;
+  document.getElementById('catPanel').classList.toggle('open', catPanelOpen);
+  document.getElementById('catToggleBtn').classList.toggle('active', catPanelOpen);
+}
+
+function selectCat(cat) {
+  selectedCat = cat;
+  // Update chip UI
+  document.querySelectorAll('.cat-chip').forEach(function(el) {
+    el.classList.toggle('selected', el.dataset.cat === cat);
+  });
+  // Show active chip in bar
+  document.getElementById('activeCatLabel').textContent = cat;
+  document.getElementById('activeCatChip').classList.add('show');
+  // Close panel
+  catPanelOpen = false;
+  document.getElementById('catPanel').classList.remove('open');
+  document.getElementById('catToggleBtn').classList.remove('active');
+  // Refresh results
+  refreshWithCat();
+}
+
+function clearCat() {
+  selectedCat = null;
+  document.querySelectorAll('.cat-chip').forEach(function(el) { el.classList.remove('selected'); });
+  document.getElementById('activeCatChip').classList.remove('show');
+  refreshWithCat();
+}
+
+function refreshWithCat() {
+  var q = document.getElementById('searchInput').value.trim();
+  if (q) {
+    showAllResults(q);
+  } else if (selectedCat) {
+    // Show all entries in this category
+    showCatBrowse();
+  } else {
+    document.getElementById('resultsSection').classList.remove('show');
+    document.getElementById('welcomeState').style.display = '';
+  }
+}
+
+function showCatBrowse() {
+  var results = fullIndex.filter(function(d) { return d.cat === selectedCat; });
+  var section = document.getElementById('resultsSection');
+  var list = document.getElementById('resultsList');
+  var empty = document.getElementById('emptyState');
+  document.getElementById('countText').textContent = results.length;
+  section.classList.add('show');
+  document.getElementById('welcomeState').style.display = 'none';
+  empty.style.display = 'none';
+  list.innerHTML = results.map(function(d, i) {
+    return '<div class="result-card" onclick="copyText(\'' + escJs(d.abbr) + ' = ' + escJs(d.full) + '\')">' +
+      '<span class="card-abbr">' + escHtml(d.abbr) + '</span>' +
+      '<span class="card-full">' + escHtml(d.full) + '</span>' +
+      '<span class="card-cat">' + escHtml(d.cat) + '</span>' +
+    '</div>';
+  }).join('');
+}
 </script>
 </body>
 </html>
