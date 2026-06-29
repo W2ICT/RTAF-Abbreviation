@@ -181,6 +181,19 @@
   .sug-full { font-size: 14px; color: var(--text); flex: 1; }
   .sug-cat { font-size: 11px; color: var(--text3); white-space: nowrap; }
   .sug-highlight { color: var(--accent2); font-weight: 700; }
+  .sug-fuzzy { opacity: 0.85; }
+  .fuzzy-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    background: rgba(124,106,247,0.15);
+    color: var(--accent2);
+    vertical-align: middle;
+  }
   .stats-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; padding: 0 2px; }
   .stats-count { font-size: 12px; color: var(--text3); }
   .stats-count span { color: var(--accent2); font-weight: 600; }
@@ -309,13 +322,45 @@ const DATA = [{"cat":"เหล่าและจำพวกทหารอา�
 ;
 
 const abbrMap = {};
+const fullMap = {};
 const fullIndex = [];
 DATA.forEach(function(d) {
   var key = d.abbr.toLowerCase();
   if (!abbrMap[key]) abbrMap[key] = [];
   abbrMap[key].push(d);
+  var fkey = d.full.toLowerCase();
+  if (!fullMap[fkey]) fullMap[fkey] = d;
   fullIndex.push(d);
 });
+
+function lookupFull(phrase) {
+  var key = phrase.toLowerCase().trim();
+  return fullMap[key] || null;
+}
+
+function parseFullTokens(query) {
+  var words = query.trim().split(/\s+/).filter(function(w) { return w; });
+  if (words.length === 0) return [];
+  var result = [];
+  var i = 0;
+  while (i < words.length) {
+    var matched = false;
+    for (var len = words.length - i; len >= 1; len--) {
+      var candidate = words.slice(i, i + len).join(' ');
+      if (lookupFull(candidate)) {
+        result.push(lookupFull(candidate));
+        i += len;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      result.push({ abbr: null, full: words.slice(i).join(' ') });
+      i = words.length;
+    }
+  }
+  return result;
+}
 
 var mode = 'abbr';
 var currentQuery = '';
@@ -440,18 +485,21 @@ function updateResultBox(q) {
 function updateResultBoxFull(q) {
   var box = document.getElementById('resultBox');
   var textEl = document.getElementById('resultText');
-  var ql = q.toLowerCase();
-  var matches = fullIndex.filter(function(d) { return d.full.toLowerCase().indexOf(ql) !== -1; });
-  if (matches.length > 0) {
-    var seen = {};
-    var abbrs = [];
-    for (var i = 0; i < matches.length && abbrs.length < 5; i++) {
-      if (!seen[matches[i].abbr]) { seen[matches[i].abbr] = true; abbrs.push(matches[i].abbr); }
+  if (!q.trim()) { box.classList.remove('has-result'); textEl.className = 'result-text result-placeholder'; textEl.innerHTML = '—'; return; }
+  var tokens = parseFullTokens(q);
+  var parts = [];
+  var anyFound = false;
+  for (var i = 0; i < tokens.length; i++) {
+    if (tokens[i].abbr) {
+      anyFound = true;
+      parts.push('<span style="color:var(--accent2);font-weight:700">' + escHtml(tokens[i].abbr) + '</span>');
+    } else {
+      parts.push('<span class="not-found">' + escHtml(tokens[i].full) + '</span>');
     }
+  }
+  if (anyFound) {
     textEl.className = 'result-text';
-    textEl.innerHTML = abbrs.map(function(a) {
-      return '<span style="color:var(--accent2);font-weight:600">' + escHtml(a) + '</span>';
-    }).join('<span class="separator">·</span>');
+    textEl.innerHTML = parts.join('');
     box.classList.add('has-result');
   } else {
     textEl.className = 'result-text result-placeholder';
@@ -460,56 +508,121 @@ function updateResultBoxFull(q) {
   }
 }
 
+// --- Fuzzy helpers ---
+function stripDots(s) { return s.replace(/\./g, '').toLowerCase(); }
+
+// Subsequence: every char in needle appears in order in haystack
+function isSubsequence(needle, haystack) {
+  var ni = 0;
+  for (var hi = 0; hi < haystack.length && ni < needle.length; hi++) {
+    if (needle[ni] === haystack[hi]) ni++;
+  }
+  return ni === needle.length;
+}
+
+// Build highlighted subsequence HTML (marks matched chars)
+function subseqHighlight(needle, text) {
+  var result = '';
+  var ni = 0;
+  var needleLow = needle.toLowerCase();
+  var textLow = text.toLowerCase();
+  for (var hi = 0; hi < text.length; hi++) {
+    if (ni < needle.length && textLow[hi] === needleLow[ni]) {
+      result += '<span class="sug-highlight">' + escHtml(text[hi]) + '</span>';
+      ni++;
+    } else {
+      result += escHtml(text[hi]);
+    }
+  }
+  return result;
+}
+
+function getFuzzyAbbrMatches(rawQuery, exclude) {
+  var q = stripDots(rawQuery);
+  if (q.length < 2) return [];
+  var seen = {};
+  exclude.forEach(function(d) { seen[d.abbr] = true; });
+  var nodot = [], subseq = [];
+  fullIndex.forEach(function(d) {
+    if (seen[d.abbr]) return;
+    var t = stripDots(d.abbr);
+    if (t.indexOf(q) !== -1) { nodot.push({d:d, type:'nodot'}); seen[d.abbr] = true; }
+    else if (isSubsequence(q, t)) { subseq.push({d:d, type:'subseq'}); seen[d.abbr] = true; }
+  });
+  return nodot.concat(subseq).slice(0, 5);
+}
+
+function getFuzzyFullMatches(rawQuery, exclude) {
+  var q = rawQuery.toLowerCase().replace(/\s+/g, '');
+  if (q.length < 2) return [];
+  var seen = {};
+  exclude.forEach(function(d) { seen[d.abbr] = true; });
+  var nodot = [], subseq = [];
+  fullIndex.forEach(function(d) {
+    if (seen[d.abbr]) return;
+    var t = d.full.toLowerCase().replace(/\s+/g, '');
+    if (t.indexOf(q) !== -1) { nodot.push({d:d, type:'nodot'}); seen[d.abbr] = true; }
+    else if (isSubsequence(q, t)) { subseq.push({d:d, type:'subseq'}); seen[d.abbr] = true; }
+  });
+  return nodot.concat(subseq).slice(0, 5);
+}
+// --- End fuzzy helpers ---
+
 function updateSuggestions(q) {
   var tokens = parseTokens(q);
   var lastToken = tokens[tokens.length - 1] || '';
   var lastLower = lastToken.toLowerCase();
-  var matches = [];
+  var exact = [];
   if (lastToken) {
     var startM = fullIndex.filter(function(d) { return d.abbr.toLowerCase().indexOf(lastLower) === 0; });
     var containM = fullIndex.filter(function(d) { return d.abbr.toLowerCase().indexOf(lastLower) !== 0 && d.abbr.toLowerCase().indexOf(lastLower) !== -1; });
-    matches = startM.concat(containM).slice(0, 8);
+    exact = startM.concat(containM).slice(0, 8);
   }
-  currentSuggestions = matches;
-  renderSuggestions(matches, lastToken);
+  var fuzzy = exact.length < 5 ? getFuzzyAbbrMatches(lastToken, exact) : [];
+  var all = exact.map(function(d) { return {d:d, type:'exact'}; }).concat(fuzzy);
+  currentSuggestions = all.map(function(x) { return x.d; });
+  renderSuggestionsTyped(all, lastToken, 'abbr');
 }
 
 function updateSuggestionsFull(q) {
   var ql = q.toLowerCase();
   var startM = fullIndex.filter(function(d) { return d.full.toLowerCase().indexOf(ql) === 0; });
   var containM = fullIndex.filter(function(d) { return d.full.toLowerCase().indexOf(ql) !== 0 && d.full.toLowerCase().indexOf(ql) !== -1; });
-  var matches = startM.concat(containM).slice(0, 8);
-  currentSuggestions = matches;
-  renderSuggestionsFull(matches, q);
+  var exact = startM.concat(containM).slice(0, 8);
+  var fuzzy = exact.length < 5 ? getFuzzyFullMatches(q, exact) : [];
+  var all = exact.map(function(d) { return {d:d, type:'exact'}; }).concat(fuzzy);
+  currentSuggestions = all.map(function(x) { return x.d; });
+  renderSuggestionsTyped(all, q, 'full');
 }
 
-function renderSuggestions(matches, highlight) {
+function renderSuggestionsTyped(items, highlight, searchMode) {
   var sug = document.getElementById('suggestions');
   var list = document.getElementById('sugList');
-  if (matches.length === 0) { sug.classList.remove('show'); return; }
-  list.innerHTML = matches.map(function(d, i) {
-    return '<div class="sug-item" data-idx="' + i + '" onclick="selectSuggestion(' + i + ')">' +
-      '<span class="sug-abbr">' + highlightText(d.abbr, highlight) + '</span>' +
-      '<span class="sug-full">' + escHtml(d.full) + '</span>' +
+  if (items.length === 0) { sug.classList.remove('show'); return; }
+  list.innerHTML = items.map(function(item, i) {
+    var d = item.d;
+    var isFuzzy = item.type !== 'exact';
+    var abbrHtml, fullHtml;
+    if (searchMode === 'abbr') {
+      abbrHtml = isFuzzy ? subseqHighlight(stripDots(highlight), d.abbr) : highlightText(d.abbr, highlight);
+      fullHtml = escHtml(d.full);
+    } else {
+      abbrHtml = escHtml(d.abbr);
+      fullHtml = isFuzzy ? subseqHighlight(highlight.replace(/\s+/g,''), d.full) : highlightText(d.full, highlight);
+    }
+    var fuzzyBadge = isFuzzy ? '<span class="fuzzy-badge">~คาดเดา</span>' : '';
+    return '<div class="sug-item' + (isFuzzy ? ' sug-fuzzy' : '') + '" data-idx="' + i + '" onclick="selectSuggestion(' + i + ')">' +
+      '<span class="sug-abbr">' + abbrHtml + '</span>' +
+      '<span class="sug-full">' + fullHtml + fuzzyBadge + '</span>' +
       '<span class="sug-cat">' + escHtml(d.cat) + '</span>' +
     '</div>';
   }).join('');
   sug.classList.add('show');
 }
 
-function renderSuggestionsFull(matches, highlight) {
-  var sug = document.getElementById('suggestions');
-  var list = document.getElementById('sugList');
-  if (matches.length === 0) { sug.classList.remove('show'); return; }
-  list.innerHTML = matches.map(function(d, i) {
-    return '<div class="sug-item" data-idx="' + i + '" onclick="selectSuggestion(' + i + ')">' +
-      '<span class="sug-abbr">' + escHtml(d.abbr) + '</span>' +
-      '<span class="sug-full">' + highlightText(d.full, highlight) + '</span>' +
-      '<span class="sug-cat">' + escHtml(d.cat) + '</span>' +
-    '</div>';
-  }).join('');
-  sug.classList.add('show');
-}
+// keep old names as aliases for compatibility
+function renderSuggestions(matches, highlight) {}
+function renderSuggestionsFull(matches, highlight) {}
 
 function selectSuggestion(idx) {
   var d = currentSuggestions[idx];
